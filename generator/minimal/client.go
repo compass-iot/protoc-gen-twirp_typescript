@@ -267,12 +267,13 @@ func (ctx *APIContext) enableUnmarshal(m *Model) {
 }
 
 func NewGenerator(twirpVersion string, p map[string]string) *Generator {
-	return &Generator{twirpVersion: twirpVersion, params: p}
+	return &Generator{twirpVersion: twirpVersion, params: p, modelLookup: make(map[string]*Model)}
 }
 
 type Generator struct {
 	twirpVersion string
 	params       map[string]string
+	modelLookup  map[string]*Model
 }
 
 func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeGeneratorResponse_File, error) {
@@ -284,6 +285,11 @@ func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeG
 	}
 
 	ctx := NewAPIContext(g.twirpVersion)
+	ctx.modelLookup = g.modelLookup
+	defer func() {
+		g.modelLookup = ctx.modelLookup
+	}()
+
 	pkg := d.GetPackage()
 
 	// Parse all Messages for generating typescript interfaces
