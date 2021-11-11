@@ -3,7 +3,6 @@ package minimal
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"path"
 	"strings"
 	"text/template"
@@ -214,16 +213,10 @@ func (ctx *APIContext) ApplyMarshalFlags() {
 
 			baseType := getBaseType(f)
 
-			if m.CanMarshal {
-				ctx.enableMarshal(ctx.modelLookup[baseType])
-			}
-
-			if m.CanUnmarshal {
-				m, ok := ctx.modelLookup[baseType]
-				if !ok {
-					log.Fatalf("could not find model of type %s for field %s", baseType, f.Name)
-				}
-				ctx.enableUnmarshal(m)
+			model, ok := ctx.modelLookup[baseType]
+			if ok {
+				ctx.enableMarshal(model)
+				ctx.enableUnmarshal(model)
 			}
 		}
 	}
@@ -241,10 +234,10 @@ func (ctx *APIContext) enableMarshal(m *Model) {
 		baseType := getBaseType(f)
 
 		mm, ok := ctx.modelLookup[baseType]
-		if !ok {
-			log.Fatalf("could not find model of type %s for field %s", f.Type, f.Name)
+		if ok {
+			ctx.enableMarshal(mm)
 		}
-		ctx.enableMarshal(mm)
+
 	}
 }
 
@@ -259,10 +252,9 @@ func (ctx *APIContext) enableUnmarshal(m *Model) {
 		baseType := getBaseType(f)
 
 		mm, ok := ctx.modelLookup[baseType]
-		if !ok {
-			log.Fatalf("could not find model of type %s for field %s", f.Type, f.Name)
+		if ok {
+			ctx.enableUnmarshal(mm)
 		}
-		ctx.enableUnmarshal(mm)
 	}
 }
 
@@ -297,9 +289,9 @@ func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeG
 		model := &Model{
 			Name: m.GetName(),
 		}
-
+		nestedTypes := m.GetNestedType()
 		for _, f := range m.GetField() {
-			model.Fields = append(model.Fields, newField(f))
+			model.Fields = append(model.Fields, newField(f, nestedTypes))
 		}
 
 		ctx.AddModel(model)
@@ -418,10 +410,24 @@ func tsModuleFilename(f *descriptor.FileDescriptorProto) string {
 	return name
 }
 
-func newField(f *descriptor.FieldDescriptorProto) ModelField {
+func newField(f *descriptor.FieldDescriptorProto, nestedTypes []*descriptor.DescriptorProto) ModelField {
 	tsType, jsonType := protoToTSType(f)
+	baseType := removePkg(f.GetTypeName())
 	jsonName := f.GetName()
 	name := camelCase(jsonName)
+	isMap := false
+
+	for _, nt := range nestedTypes {
+		if nt.GetName() == baseType {
+			if nt.Options != nil && nt.Options.MapEntry != nil && *nt.Options.MapEntry{
+				key, _ := protoToTSType(nt.GetField()[0])
+				value, _ := protoToTSType(nt.GetField()[1])
+				tsType = fmt.Sprintf("Record<%s, %s>", key, value)
+				jsonType = tsType
+				isMap = true
+			}
+		}
+	}
 
 	field := ModelField{
 		Name:     name,
@@ -430,7 +436,7 @@ func newField(f *descriptor.FieldDescriptorProto) ModelField {
 		JSONType: jsonType,
 	}
 
-	field.IsMessage = f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE
+	field.IsMessage = f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE && !isMap
 	field.IsRepeated = isRepeated(f)
 
 	return field
@@ -458,7 +464,7 @@ func protoToTSType(f *descriptor.FieldDescriptorProto) (string, string) {
 		tsType = "boolean"
 		jsonType = "boolean"
 	case descriptor.FieldDescriptorProto_TYPE_ENUM,
-	     descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+		descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 		name := f.GetTypeName()
 
 		// Google WKT Timestamp is a special case here:
