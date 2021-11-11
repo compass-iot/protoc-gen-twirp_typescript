@@ -249,8 +249,12 @@ func (ctx *APIContext) ApplyMarshalFlags() {
 
 			model, ok := ctx.modelLookup[baseType]
 			if ok {
-				ctx.enableMarshal(model)
-				ctx.enableUnmarshal(model)
+				if model.CanMarshal {
+					ctx.enableMarshal(model)
+				}
+				if model.CanUnmarshal {
+					ctx.enableUnmarshal(model)
+				}
 			}
 		}
 	}
@@ -480,14 +484,17 @@ func newField(f *descriptor.FieldDescriptorProto, nestedTypes []*descriptor.Desc
 	isMap := false
 
 	for _, nt := range nestedTypes {
-		if nt.GetName() == baseType {
-			if nt.Options != nil && nt.Options.MapEntry != nil && *nt.Options.MapEntry{
-				key, _ := protoToTSType(nt.GetField()[0])
-				value, _ := protoToTSType(nt.GetField()[1])
-				tsType = fmt.Sprintf("Record<%s, %s>", key, value)
-				jsonType = tsType
-				isMap = true
-			}
+		if nt.GetName() == baseType &&
+			nt.Options != nil &&
+			nt.Options.MapEntry != nil &&
+			*nt.Options.MapEntry &&
+			len(nt.GetField()) == 2 {
+
+			key, _ := protoToTSType(nt.GetField()[0])
+			value, _ := protoToTSType(nt.GetField()[1])
+			tsType = fmt.Sprintf("Record<%s, %s>", key, value)
+			jsonType = tsType
+			isMap = true
 		}
 	}
 
