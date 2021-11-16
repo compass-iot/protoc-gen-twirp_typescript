@@ -215,10 +215,10 @@ func (ctx *APIContext) ApplyMarshalFlags() {
 
 			model, ok := ctx.modelLookup[baseType]
 			if ok {
-				if model.CanMarshal {
+				if m.CanMarshal {
 					ctx.enableMarshal(model)
 				}
-				if model.CanUnmarshal {
+				if m.CanUnmarshal {
 					ctx.enableUnmarshal(model)
 				}
 			}
