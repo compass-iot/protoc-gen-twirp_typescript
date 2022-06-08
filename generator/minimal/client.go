@@ -97,7 +97,7 @@ export class Default{{.Name}} implements {{.Name}} {
     private hostname: string;
     private fetch: Fetch;
     private writeCamelCase: boolean;
-    private pathPrefix = "{{$twirpPrefix}}/{{.Package}}.{{.Name}}/";
+    public pathPrefix = "{{$twirpPrefix}}/{{.Package}}.{{.Name}}/";
     private headersOverride: HeadersInit;
 
     constructor(hostname: string, fetch: Fetch, writeCamelCase = false, headersOverride: HeadersInit = {}) {
@@ -128,13 +128,13 @@ export class Default{{.Name}} implements {{.Name}} {
 `
 
 type EnumOption struct {
-	Key string
+	Key   string
 	Value interface{}
 }
 
 type Enum struct {
-	Name string
-	Options []EnumOption
+	Name     string
+	Options  []EnumOption
 	Filename string
 }
 
@@ -204,15 +204,14 @@ func (i Imports) SetEnum(key filename, value string) {
 	i[key][value] = false
 }
 
-
 type APIContext struct {
-	Models      []*Model
-	Services    []*Service
-	Enums       []*Enum
-	Imports     Imports
-	TwirpPrefix string
-	modelLookup map[string]*Model
-	enumLookup map[string]*Enum
+	Models          []*Model
+	Services        []*Service
+	Enums           []*Enum
+	Imports         Imports
+	TwirpPrefix     string
+	modelLookup     map[string]*Model
+	enumLookup      map[string]*Enum
 	currentFilename string
 }
 
@@ -324,9 +323,9 @@ func (ctx *APIContext) enableUnmarshal(m *Model) {
 func NewGenerator(twirpVersion string, p map[string]string) *Generator {
 	return &Generator{
 		twirpVersion: twirpVersion,
-		params: p,
-		modelLookup: make(map[string]*Model),
-		enumLookup: make(map[string]*Enum),
+		params:       p,
+		modelLookup:  make(map[string]*Model),
+		enumLookup:   make(map[string]*Enum),
 	}
 }
 
@@ -334,7 +333,7 @@ type Generator struct {
 	twirpVersion string
 	params       map[string]string
 	modelLookup  map[string]*Model
-	enumLookup  map[string]*Enum
+	enumLookup   map[string]*Enum
 }
 
 func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeGeneratorResponse_File, error) {
@@ -406,8 +405,8 @@ func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeG
 			})
 		}
 		ctx.AddEnum(&Enum{
-			Name:   e.GetName(),
-			Options: options,
+			Name:     e.GetName(),
+			Options:  options,
 			Filename: filename,
 		})
 	}
