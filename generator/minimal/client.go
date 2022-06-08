@@ -410,7 +410,21 @@ func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeG
 			Filename: filename,
 		})
 	}
-
+	// Only include the custom 'ToJSON' and 'JSONTo' methods in generated code
+	// if the Model is part of an rpc method input arg or return type.
+	//for _, m := range ctx.Models {
+	//	for _, s := range ctx.Services {
+	//		for _, sm := range s.Methods {
+	//			if m.Name == sm.InputType {
+	//				m.CanMarshal = true
+	//			}
+	//
+	//			if m.Name == sm.OutputType {
+	//				m.CanUnmarshal = true
+	//			}
+	//		}
+	//	}
+	//}
 	for _, m := range ctx.Models {
 		m.CanMarshal = true
 		m.CanUnmarshal = true
