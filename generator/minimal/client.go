@@ -553,20 +553,25 @@ func protoToTSType(f *descriptor.FieldDescriptorProto) (string, string) {
 	case descriptor.FieldDescriptorProto_TYPE_ENUM,
 		descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 		name := f.GetTypeName()
+		tsType = removePkg(name)
+		jsonType = removePkg(name)
+		if f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE {
+			jsonType += "JSON"
+		}
 
-		// Google WKT Timestamp is a special case here:
-		//
-		// Currently the value will just be left as jsonpb RFC 3339 string.
-		// JSON.stringify already handles serializing Date to its RFC 3339 format.
-		//
-		if name == ".google.protobuf.Timestamp" {
-			tsType = "Date"
-			jsonType = "string"
-		} else {
-			tsType = removePkg(name)
-			jsonType = removePkg(name)
-			if f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE {
-				jsonType += "JSON"
+		if strings.HasPrefix(name, ".google.protobuf") {
+			switch strings.TrimLeft(name, ".google.protobuf") {
+			case "DoubleValue", "FloatValue", "Int32Value", "Int64Value", "UInt32Value", "UInt64Value":
+				tsType = "number"
+				jsonType = "number"
+			// Google WKT Timestamp is a special case here:
+			//
+			// Currently the value will just be left as jsonpb RFC 3339 string.
+			// JSON.stringify already handles serializing Date to its RFC 3339 format.
+			//
+			case "Timestamp":
+				tsType = "Date"
+				jsonType = "string"
 			}
 		}
 	}
@@ -610,6 +615,10 @@ func stringify(f ModelField) string {
 			return fmt.Sprintf("m.%s.map((n) => n.toISOString())", f.Name)
 		}
 
+		if f.Type == "number" {
+			return fmt.Sprintf("m.%s", f.Name, singularType)
+		}
+
 		if f.IsMessage {
 			return fmt.Sprintf("m.%s.map(%sToJSON)", f.Name, singularType)
 		}
@@ -617,6 +626,10 @@ func stringify(f ModelField) string {
 
 	if f.Type == "Date" {
 		return fmt.Sprintf("m.%s.toISOString()", f.Name)
+	}
+
+	if f.Type == "number" {
+		return fmt.Sprintf("(m.%s)", f.Name)
 	}
 
 	if f.IsMessage {
@@ -642,6 +655,10 @@ func parse(f ModelField, modelName string) string {
 			return fmt.Sprintf("%s.map((n) => new Date(n))", arrayField)
 		}
 
+		if f.Type == "number[]" {
+			return fmt.Sprintf("%s", arrayField)
+		}
+
 		if f.IsMessage {
 			return fmt.Sprintf("%s.map(JSONTo%s)", arrayField, singularTSType)
 		}
@@ -649,6 +666,10 @@ func parse(f ModelField, modelName string) string {
 
 	if f.Type == "Date" {
 		return fmt.Sprintf("new Date(%s)", field)
+	}
+
+	if f.Type == "number" {
+		return fmt.Sprintf("%s", field)
 	}
 
 	if f.IsMessage {
