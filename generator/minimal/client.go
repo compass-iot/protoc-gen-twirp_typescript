@@ -3,7 +3,6 @@ package minimal
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"path"
 	"strings"
 	"text/template"
@@ -15,6 +14,8 @@ import (
 
 const apiTemplate = `
 import {createTwirpRequest, throwTwirpError, Fetch} from './twirp';
+{{range $filename, $messages := .Imports}}import { {{range $msg, $type := $messages}}{{if $type}}{{$msg}},{{$msg}}JSON, {{$msg}}ToJSON, JSONTo{{$msg}}, {{else}}{{$msg}},{{end}}{{end -}}} from "./{{$filename}}"
+{{end -}}
 
 {{range .Enums}}
 export enum {{.Name}} {
@@ -32,7 +33,7 @@ export interface {{.Name}} {
     {{- end}}
 }
 
-interface {{.Name}}JSON {
+export interface {{.Name}}JSON {
     {{- range .Fields}}
     {{.JSONName}}?: {{.JSONType}};
     {{- end}}
@@ -40,7 +41,7 @@ interface {{.Name}}JSON {
 
 {{if .CanMarshal}}
 {{if .Fields}}
-const {{.Name}}ToJSON = (m: {{.Name}}): {{.Name}}JSON => {
+export const {{.Name}}ToJSON = (m: {{.Name}}): {{.Name}}JSON => {
 	if (m === null) {
 		return null;
 	}
@@ -53,7 +54,7 @@ const {{.Name}}ToJSON = (m: {{.Name}}): {{.Name}}JSON => {
 };
 {{else -}}
 {{/* Handle the generic empty message */ -}}
-const {{.Name}}ToJSON = (_: {{.Name}}): {{.Name}}JSON => {
+export const {{.Name}}ToJSON = (_: {{.Name}}): {{.Name}}JSON => {
     return {};
 };
 {{end}}
@@ -61,7 +62,7 @@ const {{.Name}}ToJSON = (_: {{.Name}}): {{.Name}}JSON => {
 
 {{if .CanUnmarshal}}
 {{if .Fields}}
-const JSONTo{{.Name}} = (m: {{.Name}} | {{.Name}}JSON): {{.Name}} => {
+export const JSONTo{{.Name}} = (m: {{.Name}} | {{.Name}}JSON): {{.Name}} => {
     {{$Model := .Name -}}
 	if (m === null) {
 		return null;
@@ -96,7 +97,7 @@ export class Default{{.Name}} implements {{.Name}} {
     private hostname: string;
     private fetch: Fetch;
     private writeCamelCase: boolean;
-    private pathPrefix = "{{$twirpPrefix}}/{{.Package}}.{{.Name}}/";
+    public pathPrefix = "{{$twirpPrefix}}/{{.Package}}.{{.Name}}/";
     private headersOverride: HeadersInit;
 
     constructor(hostname: string, fetch: Fetch, writeCamelCase = false, headersOverride: HeadersInit = {}) {
@@ -127,13 +128,14 @@ export class Default{{.Name}} implements {{.Name}} {
 `
 
 type EnumOption struct {
-	Key string
+	Key   string
 	Value interface{}
 }
 
 type Enum struct {
-	Name string
-	Options []EnumOption
+	Name     string
+	Options  []EnumOption
+	Filename string
 }
 
 type Model struct {
@@ -142,6 +144,7 @@ type Model struct {
 	Fields       []ModelField
 	CanMarshal   bool
 	CanUnmarshal bool
+	Filename     string
 }
 
 type ModelField struct {
@@ -150,6 +153,7 @@ type ModelField struct {
 	JSONName   string
 	JSONType   string
 	IsMessage  bool
+	IsEnum     bool
 	IsRepeated bool
 }
 
@@ -176,21 +180,49 @@ func NewAPIContext(twirpVersion string) APIContext {
 	ctx := APIContext{TwirpPrefix: twirpPrefix}
 
 	ctx.modelLookup = make(map[string]*Model)
+	ctx.enumLookup = make(map[string]*Enum)
+	ctx.Imports = make(map[filename]Import)
 
 	return ctx
 }
 
+type Imports map[filename]Import
+type Import = map[string]bool
+type filename string
+
+func (i Imports) Set(key filename, value string) {
+	if i[key] == nil {
+		i[key] = make(Import)
+	}
+	i[key][value] = true
+}
+
+func (i Imports) SetEnum(key filename, value string) {
+	if i[key] == nil {
+		i[key] = make(Import)
+	}
+	i[key][value] = false
+}
+
 type APIContext struct {
-	Models      []*Model
-	Services    []*Service
-	Enums       []*Enum
-	TwirpPrefix string
-	modelLookup map[string]*Model
+	Models          []*Model
+	Services        []*Service
+	Enums           []*Enum
+	Imports         Imports
+	TwirpPrefix     string
+	modelLookup     map[string]*Model
+	enumLookup      map[string]*Enum
+	currentFilename string
 }
 
 func (ctx *APIContext) AddModel(m *Model) {
 	ctx.Models = append(ctx.Models, m)
 	ctx.modelLookup[m.Name] = m
+}
+
+func (ctx *APIContext) AddEnum(e *Enum) {
+	ctx.Enums = append(ctx.Enums, e)
+	ctx.enumLookup[e.Name] = e
 }
 
 func getBaseType(f ModelField) string {
@@ -214,16 +246,39 @@ func (ctx *APIContext) ApplyMarshalFlags() {
 
 			baseType := getBaseType(f)
 
-			if m.CanMarshal {
-				ctx.enableMarshal(ctx.modelLookup[baseType])
-			}
-
-			if m.CanUnmarshal {
-				m, ok := ctx.modelLookup[baseType]
-				if !ok {
-					log.Fatalf("could not find model of type %s for field %s", baseType, f.Name)
+			model, ok := ctx.modelLookup[baseType]
+			if ok {
+				if m.CanMarshal {
+					ctx.enableMarshal(model)
 				}
-				ctx.enableUnmarshal(m)
+				if m.CanUnmarshal {
+					ctx.enableUnmarshal(model)
+				}
+			}
+		}
+	}
+}
+
+func (ctx *APIContext) PopulateImports() {
+	for _, m := range ctx.Models {
+		for _, f := range m.Fields {
+			// skip primitive types and WKT Timestamps
+			if (!f.IsMessage && !f.IsEnum) || f.Type == "Date" {
+				continue
+			}
+			baseType := getBaseType(f)
+
+			model, ok := ctx.modelLookup[baseType]
+			if ok {
+				if ctx.currentFilename != model.Filename {
+					ctx.Imports.Set(filename(model.Filename), model.Name)
+				}
+			}
+			enum, ok := ctx.enumLookup[baseType]
+			if ok {
+				if ctx.currentFilename != enum.Filename {
+					ctx.Imports.SetEnum(filename(enum.Filename), enum.Name)
+				}
 			}
 		}
 	}
@@ -241,10 +296,10 @@ func (ctx *APIContext) enableMarshal(m *Model) {
 		baseType := getBaseType(f)
 
 		mm, ok := ctx.modelLookup[baseType]
-		if !ok {
-			log.Fatalf("could not find model of type %s for field %s", f.Type, f.Name)
+		if ok {
+			ctx.enableMarshal(mm)
 		}
-		ctx.enableMarshal(mm)
+
 	}
 }
 
@@ -259,41 +314,56 @@ func (ctx *APIContext) enableUnmarshal(m *Model) {
 		baseType := getBaseType(f)
 
 		mm, ok := ctx.modelLookup[baseType]
-		if !ok {
-			log.Fatalf("could not find model of type %s for field %s", f.Type, f.Name)
+		if ok {
+			ctx.enableUnmarshal(mm)
 		}
-		ctx.enableUnmarshal(mm)
 	}
 }
 
 func NewGenerator(twirpVersion string, p map[string]string) *Generator {
-	return &Generator{twirpVersion: twirpVersion, params: p}
+	return &Generator{
+		twirpVersion: twirpVersion,
+		params:       p,
+		modelLookup:  make(map[string]*Model),
+		enumLookup:   make(map[string]*Enum),
+	}
 }
 
 type Generator struct {
 	twirpVersion string
 	params       map[string]string
+	modelLookup  map[string]*Model
+	enumLookup   map[string]*Enum
 }
 
 func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeGeneratorResponse_File, error) {
 	var files []*plugin.CodeGeneratorResponse_File
-
 	// skip WKT Timestamp, we don't do any special serialization for jsonpb.
 	if *d.Name == "google/protobuf/timestamp.proto" {
 		return files, nil
 	}
 
-	ctx := NewAPIContext(g.twirpVersion)
+	filename := baseFilename(d)
 	pkg := d.GetPackage()
+
+	ctx := NewAPIContext(g.twirpVersion)
+	ctx.modelLookup = g.modelLookup
+	ctx.enumLookup = g.enumLookup
+	ctx.currentFilename = filename
+	defer func() {
+		g.modelLookup = ctx.modelLookup
+		g.enumLookup = ctx.enumLookup
+	}()
 
 	// Parse all Messages for generating typescript interfaces
 	for _, m := range d.GetMessageType() {
 		model := &Model{
-			Name: m.GetName(),
+			Name:     m.GetName(),
+			Filename: filename,
 		}
-
+		nestedTypes := m.GetNestedType()
 		for _, f := range m.GetField() {
-			model.Fields = append(model.Fields, newField(f))
+			model.Fields = append(model.Fields, newField(f, nestedTypes))
 		}
 
 		ctx.AddModel(model)
@@ -334,26 +404,30 @@ func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeG
 				Value: x.GetNumber(),
 			})
 		}
-		ctx.Enums = append(ctx.Enums, &Enum{
-			Name:   e.GetName(),
-			Options: options,
+		ctx.AddEnum(&Enum{
+			Name:     e.GetName(),
+			Options:  options,
+			Filename: filename,
 		})
 	}
-
 	// Only include the custom 'ToJSON' and 'JSONTo' methods in generated code
 	// if the Model is part of an rpc method input arg or return type.
+	//for _, m := range ctx.Models {
+	//	for _, s := range ctx.Services {
+	//		for _, sm := range s.Methods {
+	//			if m.Name == sm.InputType {
+	//				m.CanMarshal = true
+	//			}
+	//
+	//			if m.Name == sm.OutputType {
+	//				m.CanUnmarshal = true
+	//			}
+	//		}
+	//	}
+	//}
 	for _, m := range ctx.Models {
-		for _, s := range ctx.Services {
-			for _, sm := range s.Methods {
-				if m.Name == sm.InputType {
-					m.CanMarshal = true
-				}
-
-				if m.Name == sm.OutputType {
-					m.CanUnmarshal = true
-				}
-			}
-		}
+		m.CanMarshal = true
+		m.CanUnmarshal = true
 	}
 
 	ctx.AddModel(&Model{
@@ -362,6 +436,7 @@ func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeG
 	})
 
 	ctx.ApplyMarshalFlags()
+	ctx.PopulateImports()
 
 	funcMap := template.FuncMap{
 		"stringify": stringify,
@@ -399,7 +474,7 @@ func (g *Generator) Generate(d *descriptor.FileDescriptorProto) ([]*plugin.CodeG
 	return files, nil
 }
 
-func tsModuleFilename(f *descriptor.FileDescriptorProto) string {
+func baseFilename(f *descriptor.FileDescriptorProto) string {
 	name := *f.Name
 
 	if ext := path.Ext(name); ext == ".proto" || ext == ".protodevel" {
@@ -407,15 +482,34 @@ func tsModuleFilename(f *descriptor.FileDescriptorProto) string {
 		name = base[:len(base)-len(path.Ext(base))]
 	}
 
-	name += ".ts"
-
 	return name
 }
 
-func newField(f *descriptor.FieldDescriptorProto) ModelField {
+func tsModuleFilename(f *descriptor.FileDescriptorProto) string {
+	return baseFilename(f) + ".ts"
+}
+
+func newField(f *descriptor.FieldDescriptorProto, nestedTypes []*descriptor.DescriptorProto) ModelField {
 	tsType, jsonType := protoToTSType(f)
+	baseType := removePkg(f.GetTypeName())
 	jsonName := f.GetName()
 	name := camelCase(jsonName)
+	isMap := false
+
+	for _, nt := range nestedTypes {
+		if nt.GetName() == baseType &&
+			nt.Options != nil &&
+			nt.Options.MapEntry != nil &&
+			*nt.Options.MapEntry &&
+			len(nt.GetField()) == 2 {
+
+			key, _ := protoToTSType(nt.GetField()[0])
+			value, _ := protoToTSType(nt.GetField()[1])
+			tsType = fmt.Sprintf("Record<%s, %s>", key, value)
+			jsonType = tsType
+			isMap = true
+		}
+	}
 
 	field := ModelField{
 		Name:     name,
@@ -424,7 +518,8 @@ func newField(f *descriptor.FieldDescriptorProto) ModelField {
 		JSONType: jsonType,
 	}
 
-	field.IsMessage = f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE
+	field.IsMessage = f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE && !isMap
+	field.IsEnum = f.GetType() == descriptor.FieldDescriptorProto_TYPE_ENUM
 	field.IsRepeated = isRepeated(f)
 
 	return field
@@ -441,6 +536,10 @@ func protoToTSType(f *descriptor.FieldDescriptorProto) (string, string) {
 		descriptor.FieldDescriptorProto_TYPE_FLOAT,
 		descriptor.FieldDescriptorProto_TYPE_FIXED32,
 		descriptor.FieldDescriptorProto_TYPE_FIXED64,
+		descriptor.FieldDescriptorProto_TYPE_UINT32,
+		descriptor.FieldDescriptorProto_TYPE_UINT64,
+		descriptor.FieldDescriptorProto_TYPE_SINT32,
+		descriptor.FieldDescriptorProto_TYPE_SINT64,
 		descriptor.FieldDescriptorProto_TYPE_INT32,
 		descriptor.FieldDescriptorProto_TYPE_INT64:
 		tsType = "number"
@@ -452,22 +551,27 @@ func protoToTSType(f *descriptor.FieldDescriptorProto) (string, string) {
 		tsType = "boolean"
 		jsonType = "boolean"
 	case descriptor.FieldDescriptorProto_TYPE_ENUM,
-	     descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+		descriptor.FieldDescriptorProto_TYPE_MESSAGE:
 		name := f.GetTypeName()
+		tsType = removePkg(name)
+		jsonType = removePkg(name)
+		if f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE {
+			jsonType += "JSON"
+		}
 
-		// Google WKT Timestamp is a special case here:
-		//
-		// Currently the value will just be left as jsonpb RFC 3339 string.
-		// JSON.stringify already handles serializing Date to its RFC 3339 format.
-		//
-		if name == ".google.protobuf.Timestamp" {
-			tsType = "Date"
-			jsonType = "string"
-		} else {
-			tsType = removePkg(name)
-			jsonType = removePkg(name)
-			if f.GetType() == descriptor.FieldDescriptorProto_TYPE_MESSAGE {
-				jsonType += "JSON"
+		if strings.HasPrefix(name, ".google.protobuf") {
+			switch strings.TrimLeft(name, ".google.protobuf") {
+			case "DoubleValue", "FloatValue", "Int32Value", "Int64Value", "UInt32Value", "UInt64Value":
+				tsType = "number"
+				jsonType = "number"
+			// Google WKT Timestamp is a special case here:
+			//
+			// Currently the value will just be left as jsonpb RFC 3339 string.
+			// JSON.stringify already handles serializing Date to its RFC 3339 format.
+			//
+			case "Timestamp":
+				tsType = "Date"
+				jsonType = "string"
 			}
 		}
 	}
@@ -511,6 +615,10 @@ func stringify(f ModelField) string {
 			return fmt.Sprintf("m.%s.map((n) => n.toISOString())", f.Name)
 		}
 
+		if f.Type == "number" {
+			return fmt.Sprintf("m.%s", f.Name, singularType)
+		}
+
 		if f.IsMessage {
 			return fmt.Sprintf("m.%s.map(%sToJSON)", f.Name, singularType)
 		}
@@ -518,6 +626,10 @@ func stringify(f ModelField) string {
 
 	if f.Type == "Date" {
 		return fmt.Sprintf("m.%s.toISOString()", f.Name)
+	}
+
+	if f.Type == "number" {
+		return fmt.Sprintf("(m.%s)", f.Name)
 	}
 
 	if f.IsMessage {
@@ -543,6 +655,10 @@ func parse(f ModelField, modelName string) string {
 			return fmt.Sprintf("%s.map((n) => new Date(n))", arrayField)
 		}
 
+		if f.Type == "number[]" {
+			return fmt.Sprintf("%s", arrayField)
+		}
+
 		if f.IsMessage {
 			return fmt.Sprintf("%s.map(JSONTo%s)", arrayField, singularTSType)
 		}
@@ -550,6 +666,10 @@ func parse(f ModelField, modelName string) string {
 
 	if f.Type == "Date" {
 		return fmt.Sprintf("new Date(%s)", field)
+	}
+
+	if f.Type == "number" {
+		return fmt.Sprintf("%s", field)
 	}
 
 	if f.IsMessage {
