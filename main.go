@@ -7,8 +7,8 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	plugin "github.com/golang/protobuf/protoc-gen-go/plugin"
-	"go.larrymyers.com/protoc-gen-twirp_typescript/generator"
-	"go.larrymyers.com/protoc-gen-twirp_typescript/generator/minimal"
+	"github.com/compass-iot/protoc-gen-twirp_typescript/generator"
+	"github.com/compass-iot/protoc-gen-twirp_typescript/generator/minimal"
 )
 
 func main() {
